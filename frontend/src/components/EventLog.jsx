@@ -67,7 +67,7 @@ export default function EventLog({ events }) {
             {' — '}
             {event.message}
             {event.source_hostname && (
-              <span style={{ opacity: 0.5 }}>
+              <span className="event-log__hosts">
                 {' '}({event.source_hostname} → {event.target_hostname})
               </span>
             )}
