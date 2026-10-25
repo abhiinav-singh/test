@@ -1,6 +1,22 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 
-const WS_URL = import.meta.env.VITE_WS_URL || `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`;
+function buildWsUrl() {
+  // Prefer an explicit WS URL override
+  if (import.meta.env.VITE_WS_URL) return import.meta.env.VITE_WS_URL;
+
+  // Derive from the backend base URL (https → wss, http → ws)
+  if (import.meta.env.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL
+      .replace(/^https:\/\//, 'wss://')
+      .replace(/^http:\/\//, 'ws://')
+      .replace(/\/$/, '') + '/ws';
+  }
+
+  // Local dev fallback — Vite proxy handles the /ws path
+  return `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`;
+}
+
+const WS_URL = buildWsUrl();
 const RECONNECT_BASE_DELAY = 1000;
 const MAX_RECONNECT_DELAY = 10000;
 const MAX_EVENTS = 150;
