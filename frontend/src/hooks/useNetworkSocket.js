@@ -26,7 +26,7 @@ const MAX_EVENTS = 150;
  */
 function assignPositions(nodes) {
   const count = nodes.length;
-  const radius = 6;
+  const radius = 9.5; // was 6 — expanded so nodes have breathing room and don't feel cramped
 
   return nodes.map((node, i) => {
     // Use golden angle distribution for even spacing
@@ -34,7 +34,7 @@ function assignPositions(nodes) {
     const theta = Math.PI * (1 + Math.sqrt(5)) * i;
 
     const x = radius * Math.sin(phi) * Math.cos(theta);
-    const y = (radius * 0.6) * Math.cos(phi); // Flattened vertically
+    const y = (radius * 0.48) * Math.cos(phi); // Flattened vertically
     const z = radius * Math.sin(phi) * Math.sin(theta);
 
     return {
@@ -115,7 +115,7 @@ export function useNetworkSocket() {
             // Position the attacker node offset from the cluster
             const node = {
               ...data.node,
-              position: [10, 2, 3], // Outside the main cluster
+              position: [14.5, 2.5, 4.5], // Outside the main cluster
               threatState: 'critical',
               threatTimestamp: Date.now(),
             };

@@ -33,9 +33,13 @@ export default function NodeLabel({ node }) {
     };
   }, [threat]);
 
+  // Offset label below the hexagon badge; larger nodes need a bigger gap.
+  const labelOffset =
+    node.type === 'router' || node.type === 'external' ? -0.9 : -0.72;
+
   return (
     <Html
-      position={[node.position[0], node.position[1] - 0.5, node.position[2]]}
+      position={[node.position[0], node.position[1] + labelOffset, node.position[2]]}
       center
       style={{ pointerEvents: 'none' }}
     >

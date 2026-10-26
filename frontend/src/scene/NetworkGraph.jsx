@@ -1,6 +1,7 @@
 import { useState, useCallback, useMemo, useRef } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
+import { EffectComposer, Bloom } from '@react-three/postprocessing';
 import * as THREE from 'three';
 import NetworkNode from './NetworkNode';
 import NodeLabel from './NodeLabel';
@@ -96,7 +97,7 @@ export default function NetworkGraph({
 
   return (
     <Canvas
-      camera={{ position: [0, 8, 14], fov: 50, near: 0.1, far: 100 }}
+      camera={{ position: [0, 11, 20], fov: 50, near: 0.1, far: 120 }}
       gl={{ antialias: true, alpha: false }}
       onCreated={({ gl }) => {
         gl.setClearColor('#0A0E0F');
@@ -106,17 +107,17 @@ export default function NetworkGraph({
     >
       {/* ── Lighting ───────────────────────────────────────────── */}
       <ambientLight intensity={0.15} color="#E0E6E3" />
-      <pointLight position={[0, 10, 0]} intensity={0.4} color="#39FF88" distance={30} />
-      <pointLight position={[-8, 5, -8]} intensity={0.2} color="#39FF88" distance={20} />
-      <pointLight position={[8, 5, 8]} intensity={0.15} color="#1B6B3A" distance={20} />
+      <pointLight position={[0, 14, 0]} intensity={0.4} color="#39FF88" distance={45} />
+      <pointLight position={[-12, 8, -12]} intensity={0.2} color="#39FF88" distance={35} />
+      <pointLight position={[12, 8, 12]} intensity={0.15} color="#1B6B3A" distance={35} />
 
       {/* ── Fog for depth ──────────────────────────────────────── */}
-      <fog attach="fog" args={['#0A0E0F', 15, 35]} />
+      <fog attach="fog" args={['#0A0E0F', 22, 55]} />
 
       {/* ── Grid floor (tactical radar) ────────────────────────── */}
       <gridHelper
-        args={[40, 40, '#1B6B3A', '#0F1A14']}
-        position={[0, -4, 0]}
+        args={[60, 60, '#1B6B3A', '#0F1A14']}
+        position={[0, -5.5, 0]}
         material-opacity={0.25}
         material-transparent={true}
       />
@@ -165,12 +166,28 @@ export default function NetworkGraph({
         />
       ))}
 
+      {/* ── Bloom post-processing ───────────────────────────────── */}
+      {/*
+        Subtle bloom: intensity 0.45 so the ring glows lightly without
+        blowing out. luminanceThreshold 0.92 restricts bloom to the
+        ring pixels (HDR ×1.4); background (#0A0E0F ≈ 0) unaffected.
+      */}
+      <EffectComposer>
+        <Bloom
+          luminanceThreshold={0.92}
+          luminanceSmoothing={0.15}
+          intensity={0.45}
+          radius={0.5}
+          mipmapBlur
+        />
+      </EffectComposer>
+
       {/* ── Camera controls ────────────────────────────────────── */}
       <OrbitControls
         enableDamping
         dampingFactor={0.05}
-        minDistance={5}
-        maxDistance={25}
+        minDistance={6}
+        maxDistance={40}
         maxPolarAngle={Math.PI / 2}
         autoRotate
         autoRotateSpeed={0.3}
