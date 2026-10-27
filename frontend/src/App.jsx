@@ -3,6 +3,7 @@ import NetworkGraph from './scene/NetworkGraph';
 import StatusBar from './components/StatusBar';
 import EventLog from './components/EventLog';
 import ThreatTimeline from './components/ThreatTimeline';
+import TrafficAnalytics from './components/TrafficAnalytics';
 import ScanlineOverlay from './components/ScanlineOverlay';
 import { useNetworkSocket } from './hooks/useNetworkSocket';
 import { useThreatTimeline } from './hooks/useThreatTimeline';
@@ -52,6 +53,7 @@ export default function App() {
             connections={connections}
             reducedMotion={reducedMotion}
           />
+          <TrafficAnalytics events={events} />
         </div>
 
         {/* Event Log */}
