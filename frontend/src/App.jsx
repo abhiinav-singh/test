@@ -16,7 +16,7 @@ import { useThreatTimeline } from './hooks/useThreatTimeline';
  * - Right (~35%): Terminal EventLog
  */
 export default function App() {
-  const { nodes, connections, events, threatCount, isConnected, nodeCount } =
+  const { nodes, connections, events, totalEvents, threatCount, isConnected, nodeCount } =
     useNetworkSocket();
 
   // Aggregate threat events into time buckets for the timeline
@@ -56,7 +56,7 @@ export default function App() {
 
         {/* Event Log */}
         <div className="app-layout__log">
-          <EventLog events={events} />
+          <EventLog events={events} totalEvents={totalEvents} />
         </div>
 
         {/* Threat Timeline */}

@@ -33,7 +33,7 @@ connected_clients: list[WebSocket] = []
 event_queue: asyncio.Queue = asyncio.Queue()
 detector = ThreatDetector()
 active_threats: list[dict] = []
-attacker_injected: bool = False
+attacker_links: set[tuple[str, str]] = set()
 
 
 # ── Broadcast helper ─────────────────────────────────────────────────────────
@@ -73,24 +73,27 @@ async def normal_traffic_loop():
 
 async def injected_event_consumer():
     """Consume events from the injection queue and broadcast them."""
-    global attacker_injected
     while True:
         event = await event_queue.get()
 
-        # If this is the first attack event, broadcast attacker node addition
-        if not attacker_injected and event.get("source_node") == ATTACKER_NODE["id"]:
-            attacker_injected = True
-            await broadcast({
-                "type": "topology_update",
-                "action": "add_node",
-                "node": ATTACKER_NODE,
-                "connection": {
-                    "source": ATTACKER_NODE["id"],
-                    "target": event.get("target_node", "node-1"),
-                },
-            })
-            # Small delay so frontend can process the new node
-            await asyncio.sleep(0.3)
+        # Whenever an event touches ATTACKER_NODE (as source OR target) and not linked yet
+        source_id = event.get("source_node")
+        target_id = event.get("target_node")
+        if source_id == ATTACKER_NODE["id"] or target_id == ATTACKER_NODE["id"]:
+            link = (source_id, target_id)
+            if link not in attacker_links:
+                attacker_links.add(link)
+                await broadcast({
+                    "type": "topology_update",
+                    "action": "add_node",
+                    "node": ATTACKER_NODE,
+                    "connection": {
+                        "source": source_id,
+                        "target": target_id,
+                    },
+                })
+                # Small delay so frontend can process the new node
+                await asyncio.sleep(0.3)
 
         # Run through detector
         threat = detector.analyze(event)
@@ -142,11 +145,24 @@ async def websocket_endpoint(ws: WebSocket):
     connected_clients.append(ws)
     logger.info(f"Client connected — {len(connected_clients)} active")
 
-    # Send initial topology
+    # Send initial topology including attacker node and links if active
+    topology_nodes = get_topology()
+    topology_conns = get_base_connections()
+
+    if attacker_links:
+        topology_nodes.append(ATTACKER_NODE)
+        for src, tgt in attacker_links:
+            if not any(
+                (c["source"] == src and c["target"] == tgt) or
+                (c["source"] == tgt and c["target"] == src)
+                for c in topology_conns
+            ):
+                topology_conns.append({"source": src, "target": tgt})
+
     topology = {
         "type": "topology",
-        "nodes": get_topology(),
-        "connections": get_base_connections(),
+        "nodes": topology_nodes,
+        "connections": topology_conns,
     }
     await ws.send_text(json.dumps(topology))
 

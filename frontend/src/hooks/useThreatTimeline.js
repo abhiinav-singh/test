@@ -1,8 +1,7 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 const BUCKET_SIZE_MS = 10_000; // 10-second buckets
 const WINDOW_MS = 10 * 60 * 1000; // 10-minute rolling window
-const MAX_BUCKETS = WINDOW_MS / BUCKET_SIZE_MS; // 60 buckets
 
 /**
  * Aggregates threat events into time buckets for the timeline chart.
@@ -12,15 +11,38 @@ const MAX_BUCKETS = WINDOW_MS / BUCKET_SIZE_MS; // 60 buckets
  */
 export function useThreatTimeline(events) {
   const [buckets, setBuckets] = useState([]);
-  const processedCount = useRef(0);
+  const lastSeqRef = useRef(0);
   const bucketsRef = useRef([]);
 
   // Process new events as they arrive
   useEffect(() => {
-    if (events.length <= processedCount.current) return;
+    // If events array is empty (e.g. on reset), clear buckets and reset sequence
+    if (!events || events.length === 0) {
+      lastSeqRef.current = 0;
+      bucketsRef.current = [];
+      setBuckets([]);
+      return;
+    }
 
-    const newEvents = events.slice(processedCount.current);
-    processedCount.current = events.length;
+    const lastEventSeq = events[events.length - 1]._seq ?? 0;
+
+    // Reset detection: if sequence went backwards
+    if (lastEventSeq < lastSeqRef.current) {
+      lastSeqRef.current = 0;
+      bucketsRef.current = [];
+      setBuckets([]);
+    }
+
+    if (lastEventSeq <= lastSeqRef.current) return;
+
+    // Walk back from the end until _seq <= lastSeq so it stays fast with the big buffer
+    let startIndex = events.length - 1;
+    while (startIndex >= 0 && (events[startIndex]._seq ?? 0) > lastSeqRef.current) {
+      startIndex--;
+    }
+
+    const newEvents = events.slice(startIndex + 1);
+    lastSeqRef.current = lastEventSeq;
 
     let updated = false;
 

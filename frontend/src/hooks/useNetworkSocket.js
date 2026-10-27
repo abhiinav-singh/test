@@ -19,7 +19,8 @@ function buildWsUrl() {
 const WS_URL = buildWsUrl();
 const RECONNECT_BASE_DELAY = 1000;
 const MAX_RECONNECT_DELAY = 10000;
-const MAX_EVENTS = 150;
+const MAX_BUFFERED_EVENTS = 50_000;
+const DROP_CHUNK_SIZE = 5_000;
 
 /**
  * Assigns 3D positions to nodes in a rough spherical cluster layout.
@@ -46,15 +47,300 @@ function assignPositions(nodes) {
   });
 }
 
+const ATTACKER_POSITION = [14.5, 2.5, 4.5];
+
+function getExternalNodePosition(nodeId, existingNodes) {
+  let externalCount = 0;
+  for (const node of existingNodes.values()) {
+    if (node.type === 'external' && node.id !== nodeId) {
+      externalCount += 1;
+    }
+  }
+  if (externalCount === 0) return [...ATTACKER_POSITION];
+
+  return [
+    ATTACKER_POSITION[0] + (externalCount % 3) * 2,
+    ATTACKER_POSITION[1] + Math.floor(externalCount / 3) * 2.5,
+    ATTACKER_POSITION[2] + (externalCount % 2 === 1 ? -3 : 3) * Math.ceil(externalCount / 2),
+  ];
+}
+
 export function useNetworkSocket() {
   const [nodes, setNodes] = useState(new Map());
   const [connections, setConnections] = useState([]);
   const [events, setEvents] = useState([]);
+  const [totalEvents, setTotalEvents] = useState(0);
   const [threatCount, setThreatCount] = useState(0);
   const [isConnected, setIsConnected] = useState(false);
+
   const wsRef = useRef(null);
   const reconnectAttempts = useRef(0);
   const reconnectTimer = useRef(null);
+
+  // Buffer and batching state
+  const eventsRef = useRef([]);
+  const totalEventsRef = useRef(0);
+  const seqRef = useRef(0);
+  const rafIdRef = useRef(null);
+  const nodesRef = useRef(new Map());
+  const connectionsRef = useRef([]);
+  const threatCountRef = useRef(0);
+  const hasPendingEventsRef = useRef(false);
+  const hasPendingThreatsRef = useRef(false);
+
+  const flushUpdates = useCallback(() => {
+    rafIdRef.current = null;
+
+    if (hasPendingEventsRef.current) {
+      hasPendingEventsRef.current = false;
+      setEvents([...eventsRef.current]);
+      setTotalEvents(totalEventsRef.current);
+    }
+
+    if (hasPendingThreatsRef.current) {
+      hasPendingThreatsRef.current = false;
+      setNodes(new Map(nodesRef.current));
+      setConnections([...connectionsRef.current]);
+      setThreatCount(threatCountRef.current);
+    }
+  }, []);
+
+  const handleMessage = useCallback((data) => {
+    // ── Reset command ─────────────────────────────────────────────
+    if (data.type === 'reset') {
+      if (rafIdRef.current) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
+      eventsRef.current = [];
+      totalEventsRef.current = 0;
+      seqRef.current = 0;
+      threatCountRef.current = 0;
+      hasPendingEventsRef.current = false;
+      hasPendingThreatsRef.current = false;
+
+      setEvents([]);
+      setTotalEvents(0);
+      setThreatCount(0);
+
+      // Remove external nodes, reset internal nodes
+      const nextNodes = new Map();
+      nodesRef.current.forEach((val, key) => {
+        if (val.type !== 'external') {
+          nextNodes.set(key, { ...val, threatState: 'none', threatTimestamp: null });
+        }
+      });
+      nodesRef.current = nextNodes;
+      setNodes(nextNodes);
+
+      // Remove connections to external nodes, reset threat state on remaining connections
+      const nextConns = connectionsRef.current
+        .filter((c) => nextNodes.has(c.source) && nextNodes.has(c.target))
+        .map((c) => ({
+          ...c,
+          threat: false,
+          severity: 'none',
+        }));
+      connectionsRef.current = nextConns;
+      setConnections(nextConns);
+      return;
+    }
+
+    // ── Initial topology ──────────────────────────────────────────
+    if (data.type === 'topology') {
+      const internalNodes = data.nodes.filter((n) => n.type !== 'external');
+      const externalNodes = data.nodes.filter((n) => n.type === 'external');
+
+      const positioned = assignPositions(internalNodes);
+      const nodeMap = new Map();
+      positioned.forEach((n) => nodeMap.set(n.id, n));
+
+      // Include external nodes if present in initial topology (e.g. reload after attack)
+      externalNodes.forEach((n) => {
+        const pos = n.position || getExternalNodePosition(n.id, nodeMap);
+        nodeMap.set(n.id, {
+          ...n,
+          position: pos,
+          threatState: n.threatState || 'critical',
+          threatTimestamp: n.threatTimestamp || Date.now(),
+        });
+      });
+
+      nodesRef.current = nodeMap;
+      connectionsRef.current = data.connections;
+      setNodes(nodeMap);
+      setConnections(data.connections);
+      return;
+    }
+
+    // ── Topology update (new node added, e.g., attacker) ──────────
+    if (data.type === 'topology_update') {
+      if (data.action === 'add_node') {
+        const nextNodes = new Map(nodesRef.current);
+        if (!nextNodes.has(data.node.id)) {
+          const pos = data.node.position || getExternalNodePosition(data.node.id, nextNodes);
+          const node = {
+            ...data.node,
+            position: pos,
+            threatState: data.node.threatState || 'critical',
+            threatTimestamp: Date.now(),
+          };
+          nextNodes.set(data.node.id, node);
+          nodesRef.current = nextNodes;
+          setNodes(nextNodes);
+        }
+        if (data.connection) {
+          const hasConn = connectionsRef.current.some(
+            (c) =>
+              (c.source === data.connection.source && c.target === data.connection.target) ||
+              (c.source === data.connection.target && c.target === data.connection.source)
+          );
+          if (!hasConn) {
+            const nextConns = [
+              ...connectionsRef.current,
+              { ...data.connection, threat: true, severity: 'critical' },
+            ];
+            connectionsRef.current = nextConns;
+            setConnections(nextConns);
+          }
+        }
+      }
+      return;
+    }
+
+    // ── Network event ─────────────────────────────────────────────
+    if (data.type === 'network_event') {
+      seqRef.current += 1;
+      totalEventsRef.current += 1;
+
+      const eventWithSeq = {
+        ...data,
+        _seq: seqRef.current,
+        _receivedAt: Date.now(),
+      };
+
+      eventsRef.current.push(eventWithSeq);
+
+      // When full, drop the oldest events in chunks of 5,000 (never slice on every event)
+      if (eventsRef.current.length > MAX_BUFFERED_EVENTS) {
+        const excess = eventsRef.current.length - MAX_BUFFERED_EVENTS;
+        const dropCount = Math.max(DROP_CHUNK_SIZE, excess);
+        eventsRef.current.splice(0, dropCount);
+      }
+
+      hasPendingEventsRef.current = true;
+
+      const sourceId = data.source_node;
+      const targetId = data.target_node;
+
+      // ── Ensure BOTH endpoints exist before applying threat state ──
+      let nodesChanged = false;
+      let currentNodes = nodesRef.current;
+
+      const ensureEndpoint = (id, ip, hostname) => {
+        if (!id || currentNodes.has(id)) return;
+        if (!nodesChanged) {
+          currentNodes = new Map(currentNodes);
+          nodesChanged = true;
+        }
+        const pos = getExternalNodePosition(id, currentNodes);
+        currentNodes.set(id, {
+          id,
+          ip: ip || 'unknown',
+          hostname: hostname || id,
+          type: 'external',
+          role: 'Unknown External Host',
+          position: pos,
+          threatState: 'critical',
+          threatTimestamp: Date.now(),
+        });
+      };
+
+      ensureEndpoint(sourceId, data.source_ip, data.source_hostname);
+      ensureEndpoint(targetId, data.target_ip, data.target_hostname);
+
+      if (nodesChanged) {
+        nodesRef.current = currentNodes;
+        hasPendingThreatsRef.current = true;
+      }
+
+      // ── Ensure a connection between the two endpoints exists ────
+      if (sourceId && targetId) {
+        const hasConn = connectionsRef.current.some(
+          (c) =>
+            (c.source === sourceId && c.target === targetId) ||
+            (c.source === targetId && c.target === sourceId)
+        );
+        if (!hasConn) {
+          connectionsRef.current = [
+            ...connectionsRef.current,
+            {
+              source: sourceId,
+              target: targetId,
+              threat: Boolean(data.threat),
+              severity: data.severity || (data.threat ? 'critical' : 'none'),
+            },
+          ];
+          hasPendingThreatsRef.current = true;
+        }
+      }
+
+      // ── If threat detected, update node and connection states ───
+      if (data.threat) {
+        threatCountRef.current += 1;
+        const severity = data.severity || 'critical';
+        let threatNodesChanged = false;
+        let threatNodes = nodesRef.current;
+
+        if (threatNodes.has(sourceId)) {
+          if (!threatNodesChanged) {
+            threatNodes = new Map(threatNodes);
+            threatNodesChanged = true;
+          }
+          threatNodes.set(sourceId, {
+            ...threatNodes.get(sourceId),
+            threatState: severity,
+            threatTimestamp: Date.now(),
+          });
+        }
+        if (threatNodes.has(targetId)) {
+          if (!threatNodesChanged) {
+            threatNodes = new Map(threatNodes);
+            threatNodesChanged = true;
+          }
+          threatNodes.set(targetId, {
+            ...threatNodes.get(targetId),
+            threatState: severity,
+            threatTimestamp: Date.now(),
+          });
+        }
+        if (threatNodesChanged) {
+          nodesRef.current = threatNodes;
+        }
+
+        // Update threat-active connection
+        connectionsRef.current = connectionsRef.current.map((conn) => {
+          if (
+            (conn.source === sourceId && conn.target === targetId) ||
+            (conn.source === targetId && conn.target === sourceId)
+          ) {
+            return { ...conn, threat: true, severity };
+          }
+          return conn;
+        });
+
+        hasPendingThreatsRef.current = true;
+      }
+
+      // Schedule batched re-render at most once per animation frame
+      if (!rafIdRef.current) {
+        rafIdRef.current = requestAnimationFrame(flushUpdates);
+      }
+    }
+  }, [flushUpdates]);
+
+  const handleMessageRef = useRef(handleMessage);
+  handleMessageRef.current = handleMessage;
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
@@ -88,104 +374,17 @@ export function useNetworkSocket() {
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        handleMessage(data);
+        handleMessageRef.current(data);
       } catch (err) {
         console.error('[WebSentinel] Failed to parse message', err);
       }
     };
   }, []);
 
-  const handleMessage = useCallback((data) => {
-    // ── Initial topology ──────────────────────────────────────────
-    if (data.type === 'topology') {
-      const positioned = assignPositions(data.nodes);
-      const nodeMap = new Map();
-      positioned.forEach((n) => nodeMap.set(n.id, n));
-      setNodes(nodeMap);
-      setConnections(data.connections);
-      return;
-    }
-
-    // ── Topology update (new node added, e.g., attacker) ──────────
-    if (data.type === 'topology_update') {
-      if (data.action === 'add_node') {
-        setNodes((prev) => {
-          const next = new Map(prev);
-          if (!next.has(data.node.id)) {
-            // Position the attacker node offset from the cluster
-            const node = {
-              ...data.node,
-              position: [14.5, 2.5, 4.5], // Outside the main cluster
-              threatState: 'critical',
-              threatTimestamp: Date.now(),
-            };
-            next.set(data.node.id, node);
-          }
-          return next;
-        });
-        if (data.connection) {
-          setConnections((prev) => [...prev, data.connection]);
-        }
-      }
-      return;
-    }
-
-    // ── Network event ─────────────────────────────────────────────
-    if (data.type === 'network_event') {
-      // Update event log
-      setEvents((prev) => {
-        const next = [...prev, data];
-        return next.length > MAX_EVENTS ? next.slice(-MAX_EVENTS) : next;
-      });
-
-      // If threat detected, update node states
-      if (data.threat) {
-        const severity = data.severity || 'critical';
-
-        setNodes((prev) => {
-          const next = new Map(prev);
-
-          // Mark source node as threat
-          if (next.has(data.source_node)) {
-            const sourceNode = { ...next.get(data.source_node) };
-            sourceNode.threatState = severity;
-            sourceNode.threatTimestamp = Date.now();
-            next.set(data.source_node, sourceNode);
-          }
-
-          // Mark target node as threat (handles external/unknown attackers
-          // whose source node is not in the node map)
-          if (next.has(data.target_node)) {
-            const targetNode = { ...next.get(data.target_node) };
-            targetNode.threatState = severity;
-            targetNode.threatTimestamp = Date.now();
-            next.set(data.target_node, targetNode);
-          }
-
-          return next;
-        });
-
-        // Update threat-active connections
-        setConnections((prev) => {
-          return prev.map((conn) => {
-            if (
-              conn.source === data.source_node &&
-              conn.target === data.target_node
-            ) {
-              return { ...conn, threat: true, severity };
-            }
-            return conn;
-          });
-        });
-
-        setThreatCount((prev) => prev + 1);
-      }
-    }
-  }, []);
-
   useEffect(() => {
     connect();
     return () => {
+      if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current);
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
       if (wsRef.current) wsRef.current.close();
     };
@@ -195,6 +394,7 @@ export function useNetworkSocket() {
     nodes,
     connections,
     events,
+    totalEvents,
     threatCount,
     isConnected,
     nodeCount: nodes.size,
