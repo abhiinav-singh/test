@@ -1,5 +1,5 @@
-import { useState, useCallback, useMemo, useRef } from 'react';
-import { Canvas, useFrame } from '@react-three/fiber';
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import { EffectComposer, Bloom } from '@react-three/postprocessing';
 import * as THREE from 'three';
@@ -13,16 +13,7 @@ const PULSE_INTERVAL = 1.2; // seconds between ring bursts per threatened node
 
 /**
  * Frame-accurate pulse controller.
- * Lives inside the Canvas to use R3F's useFrame — the same timing mechanism
- * as ShockwaveRingLayer — so it is immune to React re-render / StrictMode
- * double-invoke / stale-closure issues that make setInterval unreliable here.
- *
- * Algorithm: per-node elapsed-seconds counter in a Map ref.
- * Initialising a newly-threatened node at PULSE_INTERVAL causes the very
- * first frame to exceed the threshold and spawn immediately; subsequent
- * rings spawn every PULSE_INTERVAL seconds for as long as the node stays
- * in a threat state. Recovering nodes have their timer deleted so the
- * next threat transition always starts fresh.
+ * Lives inside the Canvas to use R3F's useFrame.
  */
 function PulseController({ nodes, reducedMotion, onSpawn }) {
   const timers = useRef(new Map()); // nodeId → seconds since last spawn
@@ -35,7 +26,6 @@ function PulseController({ nodes, reducedMotion, onSpawn }) {
         node.threatState === 'critical' || node.threatState === 'medium';
 
       if (isThreat) {
-        // New threat node: initialise at PULSE_INTERVAL so first frame spawns immediately
         const elapsed = timers.current.has(nodeId)
           ? timers.current.get(nodeId) + delta
           : PULSE_INTERVAL;
@@ -47,7 +37,7 @@ function PulseController({ nodes, reducedMotion, onSpawn }) {
           timers.current.set(nodeId, elapsed);
         }
       } else if (timers.current.has(nodeId)) {
-        timers.current.delete(nodeId); // node recovered — reset for next transition
+        timers.current.delete(nodeId);
       }
     });
   });
@@ -55,6 +45,114 @@ function PulseController({ nodes, reducedMotion, onSpawn }) {
   return null;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Camera view-offset component
+// Shifts the camera's rendered viewport so the graph is centred in the free
+// area between the Traffic Analytics card and the Event Feed.
+// ─────────────────────────────────────────────────────────────────────────────
+function CameraViewOffset() {
+  const { camera, size } = useThree();
+
+  useEffect(() => {
+    function recalculate() {
+      const W = size.width;
+      const H = size.height;
+
+      let leftBound = 0;
+      if (W >= 768) {
+        const card = document.querySelector('.traffic-analytics');
+        if (card) {
+          const rect = card.getBoundingClientRect();
+          leftBound = rect.right + 16;
+        }
+      }
+
+      // Clamp leftBound so it never exceeds half the canvas width
+      leftBound = Math.min(leftBound, W * 0.45);
+
+      const freeAreaMidX = leftBound + (W - leftBound) / 2;
+      const canvasMidX = W / 2;
+      const shiftPx = freeAreaMidX - canvasMidX; // positive → shift right
+
+      // Positive offsetX in setViewOffset shifts the window right, moving the
+      // rendered scene to the LEFT. We negate to push the graph RIGHT.
+      camera.setViewOffset(W, H, -shiftPx, 0, W, H);
+      camera.updateProjectionMatrix();
+    }
+
+    recalculate();
+
+    const card = document.querySelector('.traffic-analytics');
+    let ro = null;
+    if (card && typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(recalculate);
+      ro.observe(card);
+    }
+    window.addEventListener('resize', recalculate);
+    return () => {
+      window.removeEventListener('resize', recalculate);
+      if (ro) ro.disconnect();
+      camera.clearViewOffset();
+      camera.updateProjectionMatrix();
+    };
+  }, [camera, size]);
+
+  return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Auto-rotate controller
+// Pauses while user is dragging, resumes 4s after last interaction.
+// Respects reducedMotion.
+// ─────────────────────────────────────────────────────────────────────────────
+const AUTO_ROTATE_SPEED = 0.3;
+const RESUME_AFTER_MS = 4000;
+
+function AutoRotateController({ controlsRef, reducedMotion }) {
+  const lastInteractionRef = useRef(0);
+  const isUserDraggingRef = useRef(false);
+
+  useEffect(() => {
+    const controls = controlsRef.current;
+    if (!controls) return;
+
+    const onStart = () => {
+      isUserDraggingRef.current = true;
+      if (controls) controls.autoRotate = false;
+    };
+    const onEnd = () => {
+      isUserDraggingRef.current = false;
+      lastInteractionRef.current = performance.now();
+    };
+
+    controls.addEventListener('start', onStart);
+    controls.addEventListener('end', onEnd);
+    return () => {
+      controls.removeEventListener('start', onStart);
+      controls.removeEventListener('end', onEnd);
+    };
+  }, [controlsRef]);
+
+  useFrame(() => {
+    const controls = controlsRef.current;
+    if (!controls) return;
+
+    if (reducedMotion) {
+      controls.autoRotate = false;
+      return;
+    }
+
+    if (!isUserDraggingRef.current) {
+      const msSinceLast = performance.now() - lastInteractionRef.current;
+      controls.autoRotate = msSinceLast > RESUME_AFTER_MS;
+    }
+    controls.autoRotateSpeed = AUTO_ROTATE_SPEED;
+  });
+
+  return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 /**
  * Root 3D scene: the network graph visualization.
  * Contains all nodes, connections, effects, lighting, and atmosphere.
@@ -65,6 +163,7 @@ export default function NetworkGraph({
   reducedMotion = false,
 }) {
   const [shockwaves, setShockwaves] = useState([]);
+  const controlsRef = useRef(null);
 
   const nodesArray = useMemo(() => Array.from(nodes.values()), [nodes]);
 
@@ -105,6 +204,12 @@ export default function NetworkGraph({
         gl.toneMappingExposure = 1.2;
       }}
     >
+      {/* ── Camera view offset (centre graph in free area) ─── */}
+      <CameraViewOffset />
+
+      {/* ── Auto-rotate controller ──────────────────────────── */}
+      <AutoRotateController controlsRef={controlsRef} reducedMotion={reducedMotion} />
+
       {/* ── Lighting ───────────────────────────────────────────── */}
       <ambientLight intensity={0.15} color="#E0E6E3" />
       <pointLight position={[0, 14, 0]} intensity={0.4} color="#39FF88" distance={45} />
@@ -126,7 +231,7 @@ export default function NetworkGraph({
       <AmbientParticles count={150} reducedMotion={reducedMotion} />
 
       {/* ── Connection lines ───────────────────────────────────── */}
-      {connections.map((conn, i) => {
+      {connections.map((conn) => {
         const sourceNode = nodes.get(conn.source);
         const targetNode = nodes.get(conn.target);
         if (!sourceNode || !targetNode) return null;
@@ -167,11 +272,6 @@ export default function NetworkGraph({
       ))}
 
       {/* ── Bloom post-processing ───────────────────────────────── */}
-      {/*
-        Subtle bloom: intensity 0.45 so the ring glows lightly without
-        blowing out. luminanceThreshold 0.92 restricts bloom to the
-        ring pixels (HDR ×1.4); background (#0A0E0F ≈ 0) unaffected.
-      */}
       <EffectComposer>
         <Bloom
           luminanceThreshold={0.92}
@@ -182,15 +282,22 @@ export default function NetworkGraph({
         />
       </EffectComposer>
 
-      {/* ── Camera controls ────────────────────────────────────── */}
+      {/* ── Camera controls ────────────────────────────────────────
+           Allows 360° rotation:
+           - Orbit around (0,0,0)
+           - Smooth damping
+           - Auto-rotate with drag pause
+      */}
       <OrbitControls
+        ref={controlsRef}
         enableDamping
         dampingFactor={0.05}
         minDistance={6}
         maxDistance={40}
-        maxPolarAngle={Math.PI / 2}
-        autoRotate
-        autoRotateSpeed={0.3}
+        enablePan={false}
+        autoRotate={false}
+        autoRotateSpeed={AUTO_ROTATE_SPEED}
+        target={[0, 0, 0]}
       />
     </Canvas>
   );

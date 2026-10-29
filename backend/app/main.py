@@ -33,7 +33,6 @@ connected_clients: list[WebSocket] = []
 event_queue: asyncio.Queue = asyncio.Queue()
 detector = ThreatDetector()
 active_threats: list[dict] = []
-attacker_links: set[tuple[str, str]] = set()
 
 
 # ── Broadcast helper ─────────────────────────────────────────────────────────
@@ -72,28 +71,31 @@ async def normal_traffic_loop():
 
 
 async def injected_event_consumer():
-    """Consume events from the injection queue and broadcast them."""
+    """Consume events from the injection queue and broadcast them.
+
+    R2: The attacker node (node-99) is created only when a LIVE event involves it.
+    For every such event, we always broadcast a topology_update so the frontend can
+    add the node/link if it does not already have them (frontend is idempotent).
+    """
     while True:
         event = await event_queue.get()
 
-        # Whenever an event touches ATTACKER_NODE (as source OR target) and not linked yet
+        # For every event that involves the attacker, broadcast topology_update first.
+        # The frontend deduplicates nodes and connections, so repeats are harmless.
         source_id = event.get("source_node")
         target_id = event.get("target_node")
         if source_id == ATTACKER_NODE["id"] or target_id == ATTACKER_NODE["id"]:
-            link = (source_id, target_id)
-            if link not in attacker_links:
-                attacker_links.add(link)
-                await broadcast({
-                    "type": "topology_update",
-                    "action": "add_node",
-                    "node": ATTACKER_NODE,
-                    "connection": {
-                        "source": source_id,
-                        "target": target_id,
-                    },
-                })
-                # Small delay so frontend can process the new node
-                await asyncio.sleep(0.3)
+            await broadcast({
+                "type": "topology_update",
+                "action": "add_node",
+                "node": ATTACKER_NODE,
+                "connection": {
+                    "source": source_id,
+                    "target": target_id,
+                },
+            })
+            # Small delay so frontend can process the new node before the event
+            await asyncio.sleep(0.05)
 
         # Run through detector
         threat = detector.analyze(event)
@@ -139,30 +141,22 @@ app.add_middleware(
 
 
 # ── WebSocket Endpoint ───────────────────────────────────────────────────────
+# R1: A fresh page load always shows exactly the 12 normal nodes.
+# R3: The backend NEVER includes the attacker node in the initial topology message.
+#     The attacker (node-99) is introduced only via live topology_update messages
+#     when an attack event is actually processed (R2). This prevents the ghost
+#     attacker appearing on page reload or in a new tab after a previous attack.
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
     await ws.accept()
     connected_clients.append(ws)
     logger.info(f"Client connected — {len(connected_clients)} active")
 
-    # Send initial topology including attacker node and links if active
-    topology_nodes = get_topology()
-    topology_conns = get_base_connections()
-
-    if attacker_links:
-        topology_nodes.append(ATTACKER_NODE)
-        for src, tgt in attacker_links:
-            if not any(
-                (c["source"] == src and c["target"] == tgt) or
-                (c["source"] == tgt and c["target"] == src)
-                for c in topology_conns
-            ):
-                topology_conns.append({"source": src, "target": tgt})
-
+    # Send only the 12 base nodes — never include the attacker here (R3).
     topology = {
         "type": "topology",
-        "nodes": topology_nodes,
-        "connections": topology_conns,
+        "nodes": get_topology(),
+        "connections": get_base_connections(),
     }
     await ws.send_text(json.dumps(topology))
 

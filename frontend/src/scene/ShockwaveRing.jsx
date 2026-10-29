@@ -2,11 +2,17 @@ import { useRef, useState } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 
+// Pre-allocated quaternion for billboard rotation — no per-frame allocations
+const _camQuat = new THREE.Quaternion();
+
 /**
  * A single expanding ring within the shockwave burst.
  * Starts invisible until `delay` seconds have elapsed, then
  * expands from nodeRadius to ~4.5× nodeRadius with ease-out
  * opacity fade, using additive blending for a glowing energy look.
+ *
+ * The ring is billboard (always faces the camera) so it looks like a halo
+ * from any viewing angle, not edge-on when the globe is rotated.
  */
 function ShockwaveRingLayer({ position, color, delay, duration, nodeRadius, onComplete }) {
   const meshRef = useRef();
@@ -14,7 +20,7 @@ function ShockwaveRingLayer({ position, color, delay, duration, nodeRadius, onCo
   const elapsed = useRef(0);
   const done = useRef(false);
 
-  useFrame((_, delta) => {
+  useFrame(({ camera }, delta) => {
     if (done.current) return;
 
     elapsed.current += delta;
@@ -31,6 +37,10 @@ function ShockwaveRingLayer({ position, color, delay, duration, nodeRadius, onCo
       // Scale from nodeRadius to 4.5× nodeRadius
       const scale = nodeRadius + eased * nodeRadius * 3.5;
       meshRef.current.scale.setScalar(scale);
+
+      // Billboard: copy camera quaternion so the ring always faces the camera.
+      camera.getWorldQuaternion(_camQuat);
+      meshRef.current.quaternion.copy(_camQuat);
     }
 
     if (matRef.current) {
@@ -45,10 +55,11 @@ function ShockwaveRingLayer({ position, color, delay, duration, nodeRadius, onCo
   });
 
   return (
-    <mesh ref={meshRef} position={position} rotation={[-Math.PI / 2, 0, 0]}>
+    <mesh ref={meshRef} position={position}>
       {/*
         innerRadius=1, outerRadius=1.045 → thin outline ring when scaled.
         thetaSegments=96 for a smooth circle.
+        Note: no initial rotation={[-Math.PI/2, 0, 0]} — billboard handles orientation.
       */}
       <ringGeometry args={[1, 1.045, 96]} />
       <meshBasicMaterial
@@ -66,9 +77,6 @@ function ShockwaveRingLayer({ position, color, delay, duration, nodeRadius, onCo
 
 // -------------------------------------------------------------------
 // Ring config: 3 rings staggered by 150ms, each lasting ~0.9s.
-// Total burst window: 0 + 0.9 = 0.9s for ring 1,
-//                    0.15 + 0.9 = 1.05s for ring 2,
-//                    0.30 + 0.9 = 1.20s for ring 3.
 const RING_CONFIGS = [
   { delay: 0,    duration: 0.9 },
   { delay: 0.15, duration: 0.9 },
@@ -76,7 +84,7 @@ const RING_CONFIGS = [
 ];
 
 /**
- * Multi-ring expanding shockwave burst.
+ * Multi-ring expanding shockwave burst. Rings always face the camera (billboard).
  *
  * Props:
  *   position      – [x, y, z] world position of the node

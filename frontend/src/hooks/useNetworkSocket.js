@@ -23,11 +23,13 @@ const MAX_BUFFERED_EVENTS = 50_000;
 const DROP_CHUNK_SIZE = 5_000;
 
 /**
- * Assigns 3D positions to nodes in a rough spherical cluster layout.
+ * Assigns 3D positions to nodes in the spherical cluster layout.
+ * Radius = 9.5 provides breathing room and preserves the exact node size and spacing
+ * shown in the original visualization.
  */
 function assignPositions(nodes) {
   const count = nodes.length;
-  const radius = 9.5; // was 6 — expanded so nodes have breathing room and don't feel cramped
+  const radius = 9.5;
 
   return nodes.map((node, i) => {
     // Use golden angle distribution for even spacing
@@ -119,61 +121,60 @@ export function useNetworkSocket() {
       hasPendingEventsRef.current = false;
       hasPendingThreatsRef.current = false;
 
+      // Keep only internal nodes, drop any external/attacker nodes
+      const baseNodes = new Map();
+      nodesRef.current.forEach((node, id) => {
+        if (node.type !== 'external' && id !== 'node-99') {
+          baseNodes.set(id, {
+            ...node,
+            threatState: 'none',
+            threatTimestamp: null,
+          });
+        }
+      });
+      nodesRef.current = baseNodes;
+
+      // Reset threat states on base connections, drop attacker connections
+      const internalIds = new Set(baseNodes.keys());
+      const baseConns = connectionsRef.current
+        .filter((c) => internalIds.has(c.source) && internalIds.has(c.target))
+        .map((c) => ({ ...c, threat: false, severity: 'none' }));
+
+      connectionsRef.current = baseConns;
+
       setEvents([]);
       setTotalEvents(0);
       setThreatCount(0);
-
-      // Remove external nodes, reset internal nodes
-      const nextNodes = new Map();
-      nodesRef.current.forEach((val, key) => {
-        if (val.type !== 'external') {
-          nextNodes.set(key, { ...val, threatState: 'none', threatTimestamp: null });
-        }
-      });
-      nodesRef.current = nextNodes;
-      setNodes(nextNodes);
-
-      // Remove connections to external nodes, reset threat state on remaining connections
-      const nextConns = connectionsRef.current
-        .filter((c) => nextNodes.has(c.source) && nextNodes.has(c.target))
-        .map((c) => ({
-          ...c,
-          threat: false,
-          severity: 'none',
-        }));
-      connectionsRef.current = nextConns;
-      setConnections(nextConns);
+      setNodes(baseNodes);
+      setConnections(baseConns);
       return;
     }
 
     // ── Initial topology ──────────────────────────────────────────
     if (data.type === 'topology') {
-      const internalNodes = data.nodes.filter((n) => n.type !== 'external');
-      const externalNodes = data.nodes.filter((n) => n.type === 'external');
+      // Drop any attacker / external node — they must never appear on fresh load
+      const internalNodes = data.nodes.filter(
+        (n) => n.type !== 'external' && n.id !== 'node-99'
+      );
 
       const positioned = assignPositions(internalNodes);
       const nodeMap = new Map();
       positioned.forEach((n) => nodeMap.set(n.id, n));
 
-      // Include external nodes if present in initial topology (e.g. reload after attack)
-      externalNodes.forEach((n) => {
-        const pos = n.position || getExternalNodePosition(n.id, nodeMap);
-        nodeMap.set(n.id, {
-          ...n,
-          position: pos,
-          threatState: n.threatState || 'critical',
-          threatTimestamp: n.threatTimestamp || Date.now(),
-        });
-      });
+      // Use the base connections from the backend (exactly the connections forming initially)
+      const internalIds = new Set(internalNodes.map((n) => n.id));
+      const baseConns = (data.connections || []).filter(
+        (c) => internalIds.has(c.source) && internalIds.has(c.target)
+      );
 
       nodesRef.current = nodeMap;
-      connectionsRef.current = data.connections;
+      connectionsRef.current = baseConns;
       setNodes(nodeMap);
-      setConnections(data.connections);
+      setConnections(baseConns);
       return;
     }
 
-    // ── Topology update (new node added, e.g., attacker) ──────────
+    // ── Topology update (new node added, e.g. attacker) ───────────
     if (data.type === 'topology_update') {
       if (data.action === 'add_node') {
         const nextNodes = new Map(nodesRef.current);
@@ -221,7 +222,7 @@ export function useNetworkSocket() {
 
       eventsRef.current.push(eventWithSeq);
 
-      // When full, drop the oldest events in chunks of 5,000 (never slice on every event)
+      // When full, drop the oldest events in chunks of 5,000
       if (eventsRef.current.length > MAX_BUFFERED_EVENTS) {
         const excess = eventsRef.current.length - MAX_BUFFERED_EVENTS;
         const dropCount = Math.max(DROP_CHUNK_SIZE, excess);
@@ -233,59 +234,68 @@ export function useNetworkSocket() {
       const sourceId = data.source_node;
       const targetId = data.target_node;
 
-      // ── Ensure BOTH endpoints exist before applying threat state ──
-      let nodesChanged = false;
-      let currentNodes = nodesRef.current;
+      // Only create new node and connection if this event involves an attacker / external node
+      const sourceIsAttacker = sourceId === 'node-99';
+      const targetIsAttacker = targetId === 'node-99';
+      const isAttackerEvent = sourceIsAttacker || targetIsAttacker;
 
-      const ensureEndpoint = (id, ip, hostname) => {
-        if (!id || currentNodes.has(id)) return;
-        if (!nodesChanged) {
-          currentNodes = new Map(currentNodes);
-          nodesChanged = true;
-        }
-        const pos = getExternalNodePosition(id, currentNodes);
-        currentNodes.set(id, {
-          id,
-          ip: ip || 'unknown',
-          hostname: hostname || id,
-          type: 'external',
-          role: 'Unknown External Host',
-          position: pos,
-          threatState: 'critical',
-          threatTimestamp: Date.now(),
-        });
-      };
+      if (isAttackerEvent) {
+        let currentNodes = nodesRef.current;
+        let nodesChanged = false;
 
-      ensureEndpoint(sourceId, data.source_ip, data.source_hostname);
-      ensureEndpoint(targetId, data.target_ip, data.target_hostname);
+        const ensureExternalNode = (id, ip, hostname) => {
+          if (!id || currentNodes.has(id)) return;
+          if (!nodesChanged) {
+            currentNodes = new Map(currentNodes);
+            nodesChanged = true;
+          }
+          const pos = getExternalNodePosition(id, currentNodes);
+          currentNodes.set(id, {
+            id,
+            ip: ip || 'unknown',
+            hostname: hostname || id,
+            type: 'external',
+            role: 'Unknown External Host',
+            position: pos,
+            threatState: 'critical',
+            threatTimestamp: Date.now(),
+          });
+        };
 
-      if (nodesChanged) {
-        nodesRef.current = currentNodes;
-        hasPendingThreatsRef.current = true;
-      }
+        ensureExternalNode(sourceId, data.source_ip, data.source_hostname);
+        ensureExternalNode(targetId, data.target_ip, data.target_hostname);
 
-      // ── Ensure a connection between the two endpoints exists ────
-      if (sourceId && targetId) {
-        const hasConn = connectionsRef.current.some(
-          (c) =>
-            (c.source === sourceId && c.target === targetId) ||
-            (c.source === targetId && c.target === sourceId)
-        );
-        if (!hasConn) {
-          connectionsRef.current = [
-            ...connectionsRef.current,
-            {
-              source: sourceId,
-              target: targetId,
-              threat: Boolean(data.threat),
-              severity: data.severity || (data.threat ? 'critical' : 'none'),
-            },
-          ];
+        if (nodesChanged) {
+          nodesRef.current = currentNodes;
           hasPendingThreatsRef.current = true;
         }
+
+        // Add connection between attacker and target if not yet present
+        if (sourceId && targetId) {
+          const hasConn = connectionsRef.current.some(
+            (c) =>
+              (c.source === sourceId && c.target === targetId) ||
+              (c.source === targetId && c.target === sourceId)
+          );
+          if (!hasConn) {
+            connectionsRef.current = [
+              ...connectionsRef.current,
+              {
+                source: sourceId,
+                target: targetId,
+                threat: true,
+                severity: data.severity || 'critical',
+              },
+            ];
+            hasPendingThreatsRef.current = true;
+          }
+        }
       }
 
-      // ── If threat detected, update node and connection states ───
+      // CRITICAL: Normal-to-normal events NEVER create new connections!
+      // This ensures the lines between nodes stay fixed at the base connections.
+
+      // If threat detected, update node and connection states
       if (data.threat) {
         threatCountRef.current += 1;
         const severity = data.severity || 'critical';
