@@ -19,7 +19,7 @@ DEVICES = [
     {"id": "node-6",  "ip": "192.168.1.21",  "hostname": "dev-laptop-sr",   "type": "workstation","role": "Developer Workstation"},
     {"id": "node-7",  "ip": "192.168.1.30",  "hostname": "nas-backup",      "type": "storage",    "role": "NAS Backup"},
     {"id": "node-8",  "ip": "192.168.1.40",  "hostname": "print-srv",       "type": "iot",        "role": "Print Server"},
-    {"id": "node-9",  "ip": "192.168.1.41",  "hostname": "iot-thermostat",  "type": "iot",        "role": "IoT Thermostat"},
+    {"id": "node-9",  "ip": "192.168.1.41",  "hostname": "redis-cache",     "type": "server",     "role": "Redis Cache"},
     {"id": "node-10", "ip": "192.168.1.50",  "hostname": "vpn-endpoint",    "type": "server",     "role": "VPN Endpoint"},
     {"id": "node-11", "ip": "192.168.1.51",  "hostname": "mail-srv",        "type": "server",     "role": "Mail Server"},
     {"id": "node-12", "ip": "192.168.1.60",  "hostname": "monitoring-agent","type": "server",     "role": "Monitoring Agent"},
@@ -111,7 +111,7 @@ def get_base_connections():
         {"source": "node-7", "target": "node-3"},   # nas → db
         {"source": "node-7", "target": "node-1"},   # nas → router
         {"source": "node-8", "target": "node-1"},   # print → router
-        {"source": "node-9", "target": "node-1"},   # iot → router
+        {"source": "node-9", "target": "node-1"},   # redis-cache → router
         {"source": "node-11", "target": "node-1"},  # mail → router
         {"source": "node-12", "target": "node-2"},  # monitoring → web
         {"source": "node-12", "target": "node-3"},  # monitoring → db

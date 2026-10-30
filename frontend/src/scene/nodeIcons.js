@@ -22,6 +22,7 @@ function iconKeyFor(hostname, type) {
   if (h === 'dev-laptop-mk')    return 'laptop';
   if (h === 'dev-laptop-sr')    return 'laptop';
   if (h === 'print-srv')        return 'printer';
+  if (h === 'redis-cache' || h.toLowerCase() === 'redis-cache') return 'database';
   if (h === 'iot-thermostat')   return 'chip';
   if (h === 'vpn-endpoint')     return 'shield';
   if (h === 'mail-srv')         return 'envelope';

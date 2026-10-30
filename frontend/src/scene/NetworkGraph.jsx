@@ -8,6 +8,7 @@ import NodeLabel from './NodeLabel';
 import ConnectionLine from './ConnectionLine';
 import ShockwaveRing from './ShockwaveRing';
 import AmbientParticles from './AmbientParticles';
+import HighlightRing from './HighlightRing';
 
 const PULSE_INTERVAL = 1.2; // seconds between ring bursts per threatened node
 
@@ -161,11 +162,31 @@ export default function NetworkGraph({
   nodes,
   connections,
   reducedMotion = false,
+  highlightHost = null,
 }) {
   const [shockwaves, setShockwaves] = useState([]);
+  const [highlightRing, setHighlightRing] = useState(null); // { id, position }
   const controlsRef = useRef(null);
 
   const nodesArray = useMemo(() => Array.from(nodes.values()), [nodes]);
+
+  // When highlightHost changes, find the node and mount the ring
+  useEffect(() => {
+    if (!highlightHost) {
+      setHighlightRing(null);
+      return;
+    }
+    let found = null;
+    for (const node of nodes.values()) {
+      if (node.hostname === highlightHost) {
+        found = node;
+        break;
+      }
+    }
+    if (found && found.position) {
+      setHighlightRing({ id: `hr-${Date.now()}`, position: [...found.position] });
+    }
+  }, [highlightHost, nodes]);
 
   // Threat-state → ring color (mirrors NetworkNode's palette exactly)
   const threatColor = useCallback((state) => {
@@ -270,6 +291,16 @@ export default function NetworkGraph({
           onComplete={() => removeShockwave(sw.id)}
         />
       ))}
+
+      {/* ── Highlight ring (attack log click) ─────────────────── */}
+      {highlightRing && (
+        <HighlightRing
+          key={highlightRing.id}
+          position={highlightRing.position}
+          reducedMotion={reducedMotion}
+          onDone={() => setHighlightRing(null)}
+        />
+      )}
 
       {/* ── Bloom post-processing ───────────────────────────────── */}
       <EffectComposer>

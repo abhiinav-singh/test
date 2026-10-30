@@ -791,3 +791,371 @@ html, body, #root {
   }
 }
 
+
+/* ── Attack Log ──────────────────────────────────────────────────────────── */
+
+.attack-log-wrapper {
+  position: relative;
+  display: inline-block;
+  margin-left: 16px;
+  vertical-align: bottom;
+}
+
+.attack-log__pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 12px 4px 10px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+
+.attack-log__pill:hover {
+  color: var(--text-secondary);
+  border-color: var(--border-muted);
+}
+
+.attack-log__pill--active {
+  color: var(--text-primary);
+  border-color: var(--border-muted);
+}
+
+.attack-log__pill-label {
+  text-transform: uppercase;
+}
+
+.attack-log__pill-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 16px;
+  padding: 0 5px;
+  font-size: 9px;
+  font-weight: 600;
+  border-radius: 2px;
+  font-variant-numeric: tabular-nums;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-muted);
+  color: var(--text-muted);
+}
+
+.attack-log__pill-badge--hot {
+  color: var(--accent-red);
+  background: var(--accent-red-glow);
+  border-color: var(--accent-red-dim);
+}
+
+/* ── Popover Box ───────────────────────────────────────────────────────── */
+
+.attack-log__box {
+  position: fixed;
+  z-index: 200;
+  width: min(480px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: rgba(14, 19, 21, 0.98);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border-muted);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.75);
+  font-family: var(--font-mono);
+  box-sizing: border-box;
+  animation: attack-log-enter 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  color: #F2F6F4;
+}
+
+.attack-log__box * {
+  box-sizing: border-box;
+}
+
+.attack-log__box--no-anim {
+  animation: none;
+}
+
+@keyframes attack-log-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Box Header ────────────────────────────────────────────────────────── */
+
+.attack-log__box-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+
+.attack-log__box-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: #F2F6F4;
+  text-transform: uppercase;
+}
+
+.attack-log__box-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.attack-log__action-btn {
+  padding: 4px 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-radius: 3px;
+  cursor: pointer;
+  background: transparent;
+  color: #F2F6F4;
+  border: 1px solid #3A4640;
+  user-select: none;
+  transition: all 0.12s;
+}
+
+.attack-log__action-btn:hover:not(:disabled) {
+  border-color: #C8D3CD;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.attack-log__action-btn:disabled {
+  cursor: not-allowed;
+  color: #C8D3CD;
+  border-color: #222b27;
+}
+
+.attack-log__action-btn--clear:hover:not(:disabled) {
+  border-color: #C4122F;
+  color: #F2F6F4;
+  background: rgba(196, 18, 47, 0.12);
+}
+
+/* ── Server Summary Line ────────────────────────────────────────────────── */
+
+.attack-log__server-summary {
+  font-size: 12px;
+  color: #F2F6F4;
+  letter-spacing: 0.04em;
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  flex-shrink: 0;
+  word-break: break-word;
+  overflow-wrap: break-word;
+}
+
+/* ── Record List ───────────────────────────────────────────────────────── */
+
+.attack-log__list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 320px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: #3A4640 transparent;
+}
+
+.attack-log__list::-webkit-scrollbar { width: 4px; }
+.attack-log__list::-webkit-scrollbar-track { background: transparent; }
+.attack-log__list::-webkit-scrollbar-thumb { background: #3A4640; border-radius: 2px; }
+
+.attack-log__empty {
+  padding: 24px 12px;
+  font-size: 12px;
+  color: #C8D3CD;
+  text-align: center;
+}
+
+/* ── Record Card ───────────────────────────────────────────────────────── */
+
+.attack-log__record {
+  padding: 10px 12px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-left-width: 4px;
+  border-left-style: solid;
+  cursor: pointer;
+  transition: filter 0.12s;
+  width: 100%;
+}
+
+.attack-log__record--orange {
+  border-left-color: #FF8A1F;
+  background: rgba(255, 138, 31, 0.08);
+}
+
+.attack-log__record--darkred {
+  border-left-color: #C4122F;
+  background: rgba(196, 18, 47, 0.08);
+}
+
+.attack-log__record:hover {
+  filter: brightness(1.15);
+}
+
+.attack-log__record:focus-visible {
+  outline: 1px solid #C8D3CD;
+  outline-offset: 1px;
+}
+
+/* ── Line 1: time, attack name, badge, ×N ──────────────────────────────── */
+
+.attack-log__record-line1 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin-bottom: 6px;
+}
+
+.attack-log__record-time {
+  font-size: 12px;
+  color: #F2F6F4;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.attack-log__record-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: #F2F6F4;
+}
+
+.attack-log__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.attack-log__badge--medium {
+  color: #FFE2C2;
+  background: rgba(255, 138, 31, 0.18);
+  border: 1px solid #FF8A1F;
+}
+
+.attack-log__badge--high {
+  color: #FFD7DC;
+  background: rgba(196, 18, 47, 0.18);
+  border: 1px solid #C4122F;
+}
+
+.attack-log__record-count {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 700;
+  color: #F2F6F4;
+  flex-shrink: 0;
+}
+
+/* ── Line 2: Chips ─────────────────────────────────────────────────────── */
+
+.attack-log__record-chips {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: 100%;
+}
+
+.attack-log__chip {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 3px 6px;
+  border-radius: 3px;
+  max-width: 100%;
+}
+
+.attack-log__chip--attacker {
+  border: 1px solid #C4122F;
+  background: rgba(196, 18, 47, 0.08);
+}
+
+.attack-log__chip--target {
+  border: 1px solid #3A4640;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.attack-log__chip-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #C8D3CD;
+  text-transform: uppercase;
+}
+
+.attack-log__chip-val {
+  font-size: 12px;
+  color: #F2F6F4;
+  word-break: break-word;
+  overflow-wrap: break-word;
+}
+
+.attack-log__chip-sep {
+  font-size: 12px;
+  color: #C8D3CD;
+}
+
+.attack-log__chip-sub {
+  font-size: 12px;
+  color: #C8D3CD;
+  word-break: break-word;
+  overflow-wrap: break-word;
+}
+
+.attack-log__chips-arrow {
+  font-size: 11px;
+  color: #C8D3CD;
+  margin-left: 8px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+/* ── Line 3: Attempts ──────────────────────────────────────────────────── */
+
+.attack-log__record-line3 {
+  font-size: 12px;
+  color: #F2F6F4;
+  margin-top: 6px;
+  word-break: break-word;
+  overflow-wrap: break-word;
+}
+
+/* ── Responsive & Accessibility ────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  .attack-log__box {
+    animation: none !important;
+  }
+}
+

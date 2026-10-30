@@ -1,12 +1,14 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import NetworkGraph from './scene/NetworkGraph';
 import StatusBar from './components/StatusBar';
 import EventLog from './components/EventLog';
 import ThreatTimeline from './components/ThreatTimeline';
 import TrafficAnalytics from './components/TrafficAnalytics';
 import ScanlineOverlay from './components/ScanlineOverlay';
+import AttackLog from './components/AttackLog';
 import { useNetworkSocket } from './hooks/useNetworkSocket';
 import { useThreatTimeline } from './hooks/useThreatTimeline';
+import { useAttackLog } from './hooks/useAttackLog';
 
 /**
  * WebSentinel — Root Application
@@ -23,6 +25,9 @@ export default function App() {
   // Aggregate threat events into time buckets for the timeline
   const { buckets } = useThreatTimeline(events);
 
+  // Attack log: processes alert events by _seq
+  const { records, clear: clearLog } = useAttackLog(events, nodes);
+
   // Detect prefers-reduced-motion
   const [reducedMotion, setReducedMotion] = useState(false);
 
@@ -32,6 +37,19 @@ export default function App() {
     const handler = (e) => setReducedMotion(e.matches);
     mq.addEventListener('change', handler);
     return () => mq.removeEventListener('change', handler);
+  }, []);
+
+  // Highlight state for the 3D scene (cleared after 3 s)
+  const [highlightHost, setHighlightHost] = useState(null);
+  const highlightTimerRef = useRef(null);
+
+  const handleRecordClick = useCallback((record) => {
+    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+    setHighlightHost(record.targetHost);
+    highlightTimerRef.current = setTimeout(() => {
+      setHighlightHost(null);
+      highlightTimerRef.current = null;
+    }, 3000);
   }, []);
 
   return (
@@ -52,6 +70,7 @@ export default function App() {
             nodes={nodes}
             connections={connections}
             reducedMotion={reducedMotion}
+            highlightHost={highlightHost}
           />
           <TrafficAnalytics events={events} />
         </div>
@@ -61,8 +80,14 @@ export default function App() {
           <EventLog events={events} totalEvents={totalEvents} />
         </div>
 
-        {/* Threat Timeline */}
+        {/* Attack Log button + Threat Timeline */}
         <div className="app-layout__timeline">
+          <AttackLog
+            records={records}
+            onClear={clearLog}
+            onClickRecord={handleRecordClick}
+            reducedMotion={reducedMotion}
+          />
           <ThreatTimeline buckets={buckets} />
         </div>
       </div>
